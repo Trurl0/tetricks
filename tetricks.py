@@ -11,6 +11,7 @@ import copy
 import time
 import win32api, win32con
 import threading
+import pickle
 
 
 # area of the screen where the look for the field
@@ -63,7 +64,7 @@ win32_key_codes = {
 
 
 def simulate_keypress(key):
-    time.sleep(0.07)
+    time.sleep(0.05)
     win32api.keybd_event(win32_key_codes[key], 0,0,0)
     time.sleep(0.01)
     win32api.keybd_event(win32_key_codes[key],0 ,win32con.KEYEVENTF_KEYUP ,0)
@@ -172,15 +173,36 @@ def test():
     
     print(field_copy.get_heuristics(field_copy.occupations))
              
-            
+def save_calibration(field):
+
+    with open('calibration.pkl', 'wb') as f:
+        pickle.dump(field,f)
+
+def load_calibration():
+
+    with open('calibration.pkl', 'rb') as f:
+        field = pickle.load(f)
+        
+        # Reset runtime variables
+        field.holes = 0
+        
+        # Reset occupations
+        for i in range(20):
+            field.occupations.append([None, None, None, None, None, None, None, None, None, None])
+        
+    return field
+    
 def play():
 
-    global calibrated
-    global img_array
     
     debug = True
-    calibrated = False
+    calibrate_from_file = True
+    
+    # Control flags
+    global calibrated
+    calibrated = None
     started = False
+
 
     # To take screenshots
     screenshot = mss()
@@ -191,6 +213,7 @@ def play():
     # Start with a random next tetromino
     next_tetrominos = ["O", "O", "O"]
         
+    global img_array
     img_array = np.array(screenshot.grab(bounding_box))
     
     # Thread to constantly update the screen image
@@ -201,15 +224,15 @@ def play():
             # Capture image
             img_array = np.array(screenshot.grab(bounding_box))
             
-            # Show field debug lines
             if debug and calibrated:
-                field.debug_playing_area(img_array)
-                # Revert image so it isn't distorted for play
-                img_array = np.array(screenshot.grab(bounding_box))
-            
-            # Show image        
-            cv2.imshow('screen', img_array)
-            
+                # Show field debug lines
+                debug_img = copy.deepcopy(img_array)
+                field.debug_playing_area(debug_img)
+                cv2.imshow('screen', debug_img)
+            else:
+                # Show raw image
+                cv2.imshow('screen', img_array)
+                    
             if (cv2.waitKey(1) & 0xFF) == ord('q'):
                 cv2.destroyAllWindows()
                 break
@@ -222,29 +245,40 @@ def play():
     
     # To have time to click tetris windows
     time.sleep(1)
-    
+
     while True:
         
         # try:
-            # Calibrate once and don't play this loop to avoid playing in a distorted img_array
+            # Calibrate once
             if not calibrated:
-                calibrated = field.detect_playing_area(img_array)
-                print ("Calibration ok: "+str(calibrated))
+            
+                if calibrate_from_file:
+                    field = load_calibration()
+                    calibrated = True
+                else:
+                    calibrated = field.detect_playing_area(img_array)
+                    save_calibration(field)
+                print ("Calibration ok")
                 
             else:
-            
                 # Update "Next" list
                 old_next_tetrominos = copy.deepcopy(next_tetrominos)
-                next_tetrominos = field.get_next_tetrominos(img_array)
-              
+                next_tetrominos, hold_tetro = field.get_next_tetrominos(img_array)
+                
                 if not started:
+                    
+                    # Hold first piece, start playing with the next
+                    simulate_keypress("c")
+                    
+                    # Update next list
+                    old_next_tetrominos, hold_tetro = field.get_next_tetrominos(img_array)
+                    
                     started = True
-                    simulate_keypress("up_arrow")
-                    time.sleep(0.4)
                     
                 elif is_new_round(old_next_tetrominos, next_tetrominos):
                     
                     # Time to update occupations
+                    time.sleep(1.1)
                     time.sleep(0.1)
                     
                     if debug: print("\n\nNEW ROUND\n")
@@ -256,17 +290,30 @@ def play():
                     
                     # Current tetro is first from "Next" list of previous round
                     next_tetromino = Tetromino.create(old_next_tetrominos[0])
-                    if debug: print("current tetro: "+str(old_next_tetrominos[0]))
-                    if debug: print("Next: "+str(next_tetrominos))
                     
+                    # Create tetro from "Hold"
+                    hold_tetromino = Tetromino.create(hold_tetro)
+                    
+                    if debug: print("current tetro: "+str(old_next_tetrominos[0]))
+                    if debug: print("hold tetro   : "+str(hold_tetro))
+                    if debug: print("Next: "+str(next_tetrominos))
 
-                    # Calculate best drop
-                    best_column, best_rotation = field.calculate_best_drop(next_tetromino)
+                    # Calculate best drop with current and hold
+                    score,      best_column, best_rotation, best_occupations= field.calculate_best_drop(next_tetromino)
+                    hold_score, hold_column, hold_rotation, hold_occupations = field.calculate_best_drop(hold_tetromino)
+                    
+                    # Move tetro to best drop, this takes some time due to input delay
+                    if hold_score > score:
+                        if debug: print_occupations(hold_occupations)
+                        simulate_keypress("c")
+                        move(hold_tetromino, hold_column, hold_rotation)
+                    else:
+                        if debug: print_occupations(best_occupations)
+                        move(next_tetromino, best_column, best_rotation)
                     # if debug: print("Best column, rotation: "+str(best_column)+", "+str(best_rotation))
                     
-                    # Move current tetro to best drop
-                    # This takes some time due to input delay
-                    move(next_tetromino, best_column, best_rotation)
+                    
+                    # pause after moving
                     # simulate_keypress("p")
                 
         # except Exception as e:

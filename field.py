@@ -23,6 +23,18 @@ def is_similar_color(color1, color2, tolerance = 3):
     return is_similar
     
 
+def detect_tetromino(img_array, loc):
+    letter = None
+    if is_similar_color  (img_array[loc[0]+1, loc[1]+1], T_color, tolerance=10): letter = "T"
+    elif is_similar_color(img_array[loc[0]+1, loc[1]+1], I_color, tolerance=10): letter = "I"
+    elif is_similar_color(img_array[loc[0]+1, loc[1]+1], Z_color, tolerance=10): letter = "Z"
+    elif is_similar_color(img_array[loc[0]+1, loc[1]+1], S_color, tolerance=10): letter = "S"
+    elif is_similar_color(img_array[loc[0]+1, loc[1]+1], L_color, tolerance=10): letter = "L"
+    elif is_similar_color(img_array[loc[0]+1, loc[1]+1], J_color, tolerance=10): letter = "J"
+    elif is_similar_color(img_array[loc[0]+1, loc[1]+1], O_color, tolerance=10): letter = "O"
+    return letter
+    
+    
 def print_occupations(occupations):
     # print to cmd
     for i in range(20):
@@ -41,12 +53,15 @@ class Field:
         self.width  = 10
         self.height = 20
         
+        # Heuristics
+        self.holes = 0
+        
         # TODO: calibrate weight for heuristics
         self.placed_hight_weight = 1
         self.height_avg_weight   = 1
-        self.holes_weight        = 5
+        self.holes_weight        = 3
         
-        # All this to be returned
+        # Calibrated just once at the start of the game
         self.left_border = None
         self.right_border = None
         self.top_border = None
@@ -55,6 +70,10 @@ class Field:
         self.next_right_border = None
         self.next_top_border = None
         self.next_down_border = None
+        self.hold_left_border = None
+        self.hold_right_border = None
+        self.hold_top_border = None
+        self.hold_down_border = None
             
         # Create empty list for needed arrays
         self.screen_positions = []        
@@ -89,7 +108,21 @@ class Field:
                     if self.top_border and not self.down_border:
                         self.down_border = [i, j]
             
-            # Get next piece vertical borders
+            # Aprox cell size 
+            cell_size = (self.down_border[0] - self.top_border[0]) / 20
+            x_offset = cell_size/2 + 5 # To get the aprox center of each cell
+            y_offset = cell_size/2 - 5 # To get the aprox center of each cell
+
+            # Assign a screen coordinate to each cell in screen_positions
+            # The pixel in each coordinate is used to detect the state of each cell
+            for i in range(20):
+                for j in range(10):
+                    screen_i = int(self.top_border[0] + (i*cell_size) + x_offset)
+                    screen_j = int(self.left_border[1] + (j*cell_size) + y_offset)
+                    self.screen_positions[i][j] = ScreenPosition(screen_i, screen_j)
+                
+                
+            # Get NEXT piece vertical borders
             inside_border = False
             for j in range(self.right_border[1], 800):
                 i = 200
@@ -103,7 +136,7 @@ class Field:
                         inside_border = False
                         if not self.next_left_border:
                             self.next_left_border = [i, j]
-                        
+
             # Use vertical info for horizontal
             inside_border = False
             for i in range(0, 800):
@@ -119,26 +152,47 @@ class Field:
                         if not self.next_top_border:
                             self.next_top_border = [i, j]
             
-            # Aprox cell size 
-            cell_size = (self.down_border[0] - self.top_border[0]) / 20
-            x_offset = cell_size/2 + 5 # To get the aprox center of each cell
-            y_offset = cell_size/2 - 5 # To get the aprox center of each cell
-
-            # Assign a screen coordinate to each cell in screen_positions
-            # The pixel in each coordinate is used to detect the state of each cell
-            for i in range(20):
-                for j in range(10):
-                    screen_i = int(self.top_border[0] + (i*cell_size) + x_offset)
-                    screen_j = int(self.left_border[1] + (j*cell_size) + y_offset)
-                    self.screen_positions[i][j] = ScreenPosition(screen_i, screen_j)
-                
-            # Get screen coordinate of next pieces
-            self.next_middle = self.next_left_border[1] + int((self.next_right_border[1] - self.next_left_border[1])/2)
-            self.next_offset = int((self.next_down_border[0] - self.next_top_border[0])/3)
+            # Get screen coordinate of NEXT pieces
+            self.next_middle = self.next_left_border[1] + int((self.next_right_border[1] - self.next_left_border[1])/2) + 3
+            self.next_offset = int((self.next_down_border[0] - self.next_top_border[0])/3) - 1
             self.next_locations = [[int(self.next_top_border[0]+self.next_offset*0.6), self.next_middle],
                               [int(self.next_top_border[0]+self.next_offset*1.6), self.next_middle],
                               [int(self.next_top_border[0]+self.next_offset*2.65), self.next_middle]]
                               
+                              
+            # Get HOLD piece vertical borders
+            inside_border = False
+            for j in range(0, self.left_border[1]):
+                i = self.top_border[0] + 10
+                if is_similar_color(img_array[i, j], next_bounds_color):
+                    if not inside_border:
+                        inside_border = True
+                        if self.hold_left_border and not self.hold_right_border:
+                            self.hold_right_border = [i, j]
+                else:
+                    if inside_border:
+                        inside_border = False
+                        if not self.hold_left_border:
+                            self.hold_left_border = [i, j]
+            # Use vertical info for horizontal
+            inside_border = False
+            for i in range(0, 800):
+                j = self.hold_right_border[1]-5
+                if is_similar_color(img_array[i, j], next_bounds_color):
+                    if not inside_border:
+                        inside_border = True
+                        if self.hold_top_border and not self.hold_down_border:
+                            self.hold_down_border = [i, j]
+                else:
+                    if inside_border:
+                        inside_border = False
+                        if not self.hold_top_border:
+                            self.hold_top_border = [i, j]
+                        
+            # Get screen coordinate of HOLD piece
+            self.hold_middle_y = self.hold_left_border[1] + int((self.hold_right_border[1] - self.hold_left_border[1])/2)
+            self.hold_middle_x = self.hold_top_border[0] + int( 1.2*((self.hold_down_border[0] - self.hold_top_border[0])/2) )
+            self.hold_location = [self.hold_middle_x, self.hold_middle_y]
             # Return true if no errors
             return True
            
@@ -149,56 +203,78 @@ class Field:
                               
     def debug_playing_area(self, img_array):
         # For debugging only, careful as we are drawing on the original img
-        
-            # Draw playing field area
-            for i in range(self.top_border[0], self.down_border[0]):
-                img_array[i, self.left_border[1]]  = [0, 255, 0, 255]
-                img_array[i, self.right_border[1]] = [0, 255, 0, 255]
-            for j in range(self.left_border[1], self.right_border[1]):
-                img_array[self.top_border[0], j]  = [0, 255, 0, 255]
-                img_array[self.down_border[0], j] = [0, 255, 0, 255]
-                          
-            # Draw next piece area
-            for i in range(self.next_top_border[0], self.next_down_border[0]):
-                img_array[i, self.next_left_border[1]]  = [0, 255, 0, 255]
-                img_array[i, self.next_right_border[1]] = [0, 255, 0, 255]
-            for j in range(self.next_left_border[1], self.next_right_border[1]):
-                img_array[self.next_top_border[0], j]  = [0, 255, 0, 255]
-                img_array[self.next_down_border[0], j] = [0, 255, 0, 255]
-                          
-            # Draw detection axes
-            for i in range(0, 800):
-                j = self.left_border[1] + 1
-                if self.top_border[0] < i < self.down_border[0]:
-                    img_array[i, j] = [0, 255, 0, 255]
-                else:
-                    img_array[i, j] = [0, 0, 255, 255]
-            for j in range(0, 800):
-                i = 200
-                if (self.left_border[1] < j < self.right_border[1]) or (self.next_left_border[1] < j < self.next_right_border[1]) :
-                    img_array[i, j] = [0, 255, 0, 255]
-                else:
-                    img_array[i, j] = [0, 0, 255, 255]
+
+        # Draw hold location
+        for i in range(self.hold_middle_x-20, self.hold_middle_x+20):
+            j = self.hold_middle_y
+            img_array[i, j] = [255, 255, 0, 255]
+            
+        for j in range(self.hold_middle_y-20, self.hold_middle_y+20):
+            i = self.hold_middle_x
+            img_array[i, j] = [255, 255, 0, 255]
+            
+        # Draw playing field area
+        for i in range(self.top_border[0], self.down_border[0]):
+            img_array[i, self.left_border[1]]  = [0, 255, 0, 255]
+            img_array[i, self.right_border[1]] = [0, 255, 0, 255]
+        for j in range(self.left_border[1], self.right_border[1]):
+            img_array[self.top_border[0], j]  = [0, 255, 0, 255]
+            img_array[self.down_border[0], j] = [0, 255, 0, 255]
+                      
+        # Draw next piece area
+        for i in range(self.next_top_border[0], self.next_down_border[0]):
+            img_array[i, self.next_left_border[1]]  = [0, 255, 0, 255]
+            img_array[i, self.next_right_border[1]] = [0, 255, 0, 255]
+        for j in range(self.next_left_border[1], self.next_right_border[1]):
+            img_array[self.next_top_border[0], j]  = [0, 255, 0, 255]
+            img_array[self.next_down_border[0], j] = [0, 255, 0, 255]
+            
+        # Draw hold piece area
+        for i in range(self.hold_top_border[0], self.hold_down_border[0]):
+            img_array[i, self.hold_left_border[1]]  = [0, 255, 0, 255]
+            img_array[i, self.hold_right_border[1]] = [0, 255, 0, 255]
+        for j in range(self.hold_left_border[1], self.hold_right_border[1]):
+            img_array[self.hold_top_border[0], j]  = [0, 255, 0, 255]
+            img_array[self.hold_down_border[0], j] = [0, 255, 0, 255]
+                      
+        # Draw detection axes
+        for i in range(0, 800):
+            j = self.left_border[1] + 1
+            if self.top_border[0] < i < self.down_border[0]:
+                img_array[i, j] = [0, 255, 0, 255]
+            else:
+                img_array[i, j] = [0, 0, 255, 255]
+        for j in range(0, 800):
+            i = 200
+            if (self.left_border[1] < j < self.right_border[1]) or (self.next_left_border[1] < j < self.next_right_border[1]) :
+                img_array[i, j] = [0, 255, 0, 255]
+            else:
+                img_array[i, j] = [0, 0, 255, 255]
+            
+        for i in range(0, 800):
+            j = self.next_right_border[1]-5
+            if self.next_top_border[0] < i < self.next_down_border[0]:
+                img_array[i, j] = [0, 255, 0, 255]
+            else:
+                img_array[i, j] = [0, 0, 255, 255]
                 
-            for i in range(0, 800):
-                j = self.next_right_border[1]-5
-                if self.next_top_border[0] < i < self.next_down_border[0]:
-                    img_array[i, j] = [0, 255, 0, 255]
-                else:
-                    img_array[i, j] = [0, 0, 255, 255]
-                    
-            for i in range(self.next_top_border[0], self.next_down_border[0]):
-                img_array[i, self.next_middle] = [255, 255, 0, 255]
-                
-            for loc in self.next_locations:
-                for i in range(self.next_middle-20, self.next_middle+20):
-                    img_array[loc[0], i] = [255, 255, 0, 255]
-                 
-            for i in range(20):
-                for j in range(10):
-                    for i2 in range(3):
-                        for j2 in range(3):
-                           img_array[self.screen_positions[i][j].screen_i+i2, self.screen_positions[i][j].screen_j+j2]  = [255, 0, 255, 255]
+        for j in range(0, self.left_border[1]):
+            i = self.top_border[0] + 10
+            img_array[i, j] = [0, 255, 0, 255]
+            
+        # Draw next locations
+        for i in range(self.next_top_border[0], self.next_down_border[0]):
+            img_array[i, self.next_middle] = [255, 255, 0, 255]
+            
+        for loc in self.next_locations:
+            for i in range(self.next_middle-20, self.next_middle+20):
+                img_array[loc[0], i] = [255, 255, 0, 255]
+             
+        for i in range(20):
+            for j in range(10):
+                for i2 in range(3):
+                    for j2 in range(3):
+                       img_array[self.screen_positions[i][j].screen_i+i2, self.screen_positions[i][j].screen_j+j2]  = [255, 0, 255, 255]
    
     def get_occupations_from_screen(self, img_array):
         
@@ -241,26 +317,18 @@ class Field:
         next_tetrominos = []
         for loc in self.next_locations:
             # Hack: +1 to avoid looking at debug lines (always the same color)
-            if is_similar_color  (img_array[loc[0]+1, loc[1]+1], T_color, tolerance=10): next_tetrominos.append("T")
-            elif is_similar_color(img_array[loc[0]+1, loc[1]+1], I_color, tolerance=10): next_tetrominos.append("I")
-            elif is_similar_color(img_array[loc[0]+1, loc[1]+1], Z_color, tolerance=10): next_tetrominos.append("Z")
-            elif is_similar_color(img_array[loc[0]+1, loc[1]+1], S_color, tolerance=10): next_tetrominos.append("S")
-            elif is_similar_color(img_array[loc[0]+1, loc[1]+1], L_color, tolerance=10): next_tetrominos.append("L")
-            elif is_similar_color(img_array[loc[0]+1, loc[1]+1], J_color, tolerance=10): next_tetrominos.append("J")
-            elif is_similar_color(img_array[loc[0]+1, loc[1]+1], O_color, tolerance=10): next_tetrominos.append("O")
+            tetro_letter = detect_tetromino(img_array, loc)
+            if tetro_letter:
+                next_tetrominos.append(tetro_letter)
             # else: print("Unknown: "+str(img_array[loc[0]+1, loc[1]+1]))
             
-        return next_tetrominos
+        hold_tetromino = detect_tetromino(img_array, self.hold_location)
+        
+        return next_tetrominos, hold_tetromino
 
-    def show_debug_field(self, img_array):
-
-        for loc in self.next_locations:
-            for i in range(-10, 10):
-                img_array[loc[0], loc[1]+i] = [255, 255, 0, 255]
-                img_array[loc[0]+i, loc[1]] = [255, 255, 0, 255]
-             
     def place_tetromino(self, tetromino, occupations, field_i, field_j):
-        # occupy field with tetronimo in definitive position    
+        # occupy field with tetronimo in definitive position
+        # Assumption: the tetro is in a verified final position
         for i, row in enumerate(tetromino.body):
             for j, occupied in enumerate(row):
                 if occupied:
@@ -354,6 +422,8 @@ class Field:
                 # TODO: in copied and modified field, not original one...
                 height_avg, higher, holes = self.get_heuristics(test_occupations)
                 
+                # self.holes = 0
+                # new_holes = holes - self.holes
                 score = height_avg*(self.height_avg_weight) + placed_tetro_height*(self.placed_hight_weight) - holes*(self.holes_weight)
                     
                 # Keep movement with better heuristics
@@ -375,5 +445,6 @@ class Field:
         print("holes_score:      "+str(best_holes         *(self.holes_weight)))
         print("height_sum_score: "+str(best_height_avg    *(self.height_avg_weight)))
         print("higher_score:     "+str(best_placed_height *(self.placed_hight_weight)))
+        print("best_occupations:")
             
-        return best_column, best_rotation
+        return best_score, best_column, best_rotation, best_occupations
