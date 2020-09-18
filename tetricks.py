@@ -9,13 +9,14 @@ from mss import mss
 from PIL import Image
 import copy
 import time
-import win32api, win32con
+import win32api, win32con, win32gui
 import threading
 import pickle
 
 
 # area of the screen where the look for the field
-bounding_box = {'top': 420, 'left': 60, 'width': 800, 'height': 800}
+# Important to start on 0 so screen coordinates match click coordinates, else correct them
+bounding_box = {'top': 0, 'left': 0, 'width': 800, 'height': 1300}
 
 win32_key_codes = {
     'up_arrow':0x26,
@@ -63,14 +64,14 @@ win32_key_codes = {
 }
 
 
-def simulate_keypress(key):
-    time.sleep(0.05)
+def simulate_keypress(key, key_delay=0.03):
     win32api.keybd_event(win32_key_codes[key], 0,0,0)
-    time.sleep(0.01)
+    time.sleep(key_delay)
     win32api.keybd_event(win32_key_codes[key],0 ,win32con.KEYEVENTF_KEYUP ,0)
+    time.sleep(key_delay)
 
 
-def move(tetromino, column, rotation):
+def move(tetromino, column, rotation, key_delay=0.3):
     
     # Initial position to calculate input needed to achieve final position
     initial_j = 3
@@ -95,10 +96,10 @@ def move(tetromino, column, rotation):
     
     # Rotate always right for now
     if rotation == 3:
-        simulate_keypress('z')
+        simulate_keypress('z', key_delay)
     else:
         for i in range(rotation):
-            simulate_keypress('x')
+            simulate_keypress('x', key_delay)
         
     # Send keypresses with some delay and hard fall at the end
     move_key = "right_arrow"
@@ -107,10 +108,10 @@ def move(tetromino, column, rotation):
         h_move = -h_move
     for i in range(h_move):
         # print(move_key+" "+str(i))
-        simulate_keypress(move_key)
+        simulate_keypress(move_key, key_delay)
 
     # Hard fall at the end
-    simulate_keypress('up_arrow')
+    simulate_keypress('up_arrow', key_delay)
     
     
 def is_new_round(old_next_tetrominos, next_tetrominos):
@@ -172,36 +173,27 @@ def test():
     print_occupations(field_copy.occupations)
     
     print(field_copy.get_heuristics(field_copy.occupations))
-             
-def save_calibration(field):
-
-    with open('calibration.pkl', 'wb') as f:
-        pickle.dump(field,f)
-
-def load_calibration():
-
-    with open('calibration.pkl', 'rb') as f:
-        field = pickle.load(f)
-        
-        # Reset runtime variables
-        field.holes = 0
-        
-        # Reset occupations
-        for i in range(20):
-            field.occupations.append([None, None, None, None, None, None, None, None, None, None])
-        
-    return field
-    
+           
 def play():
 
-    
+    # Runtime config
     debug = True
-    calibrate_from_file = True
+    key_press_delay = 0.028
+    # key_press_delay = 0.1
     
+    # None if you want to calibrate for a new field
+    # calibration = None
+    # royale
+    calibration = ((154, 318), (569, 1186), (70, 413), [(652, 414), (656, 502), (652, 593)])
+    # single player
+    # calibration = ((150, 288), (576, 1172), (69, 388), [(659, 390), (659, 478), (659, 570)])
+
     # Control flags
     global calibrated
-    calibrated = None
-    started = False
+    calibrated         = False
+    started            = False
+    last_cleared_lines = 0
+    next_occupations = None
 
 
     # To take screenshots
@@ -210,7 +202,7 @@ def play():
     # This is the playing field
     field = Field()
     
-    # Start with a random next tetromino
+    # Start with random next tetrominos
     next_tetrominos = ["O", "O", "O"]
         
     global img_array
@@ -223,7 +215,7 @@ def play():
         while True:
             # Capture image
             img_array = np.array(screenshot.grab(bounding_box))
-            
+                
             if debug and calibrated:
                 # Show field debug lines
                 debug_img = copy.deepcopy(img_array)
@@ -243,96 +235,133 @@ def play():
     img_thread = threading.Thread(target=screen_thread, daemon=True)
     img_thread.start()
     
-    # To have time to click tetris windows
+    # To have time to click tetris window
     time.sleep(1)
 
-    while True:
+    if not calibrated:
+    
+        if calibration is None:
+            calibration = field.calibrate_manually(img_array)
+            print(calibration)
         
-        # try:
-            # Calibrate once
-            if not calibrated:
+        calibrated = field.set_playing_area(*calibration)
+        
+        print ("Calibrated")
+    
+    round_time = time.time()
+    while True:
+            # continue
+        
+        try:
+            # Update "Next" list to see if is next round
+            old_next_tetrominos = copy.deepcopy(next_tetrominos)
+            next_tetrominos, hold_tetro = field.get_next_tetrominos(img_array)
             
-                if calibrate_from_file:
-                    field = load_calibration()
-                    calibrated = True
+            if not started:
+                started = True
+                
+                # Hold first piece, start playing with the next
+                simulate_keypress("c")
+                
+                # Update next list
+                old_next_tetrominos, hold_tetro = field.get_next_tetrominos(img_array)
+                
+            elif is_new_round(old_next_tetrominos, next_tetrominos):
+                print("round_time: "+str(time.time()-round_time))
+                round_time = time.time()
+                
+                # Time to update occupations
+                time.sleep(0.08)
+                
+                if debug: print("\n\nNEW ROUND\n")
+                    
+                # Hack: when clearing lines the text messes with occupation detection
+                # In that case, use calculated ocupations for the next round
+                if last_cleared_lines:
+                    field.occupations = copy.deepcopy(next_occupations)
                 else:
-                    calibrated = field.detect_playing_area(img_array)
-                    save_calibration(field)
-                print ("Calibration ok")
-                
-            else:
-                # Update "Next" list
-                old_next_tetrominos = copy.deepcopy(next_tetrominos)
-                next_tetrominos, hold_tetro = field.get_next_tetrominos(img_array)
-                
-                if not started:
-                    
-                    # Hold first piece, start playing with the next
-                    simulate_keypress("c")
-                    
-                    # Update next list
-                    old_next_tetrominos, hold_tetro = field.get_next_tetrominos(img_array)
-                    
-                    started = True
-                    
-                elif is_new_round(old_next_tetrominos, next_tetrominos):
-                    
-                    # Time to update occupations
-                    time.sleep(1.1)
-                    time.sleep(0.1)
-                    
-                    if debug: print("\n\nNEW ROUND\n")
-                        
                     # Get occupations, ignoring floating tetros
                     field.get_occupations_from_screen(img_array)
-                    if debug: print("Initial occupations")
-                    if debug: print_occupations(field.occupations)
                     
-                    # Current tetro is first from "Next" list of previous round
-                    next_tetromino = Tetromino.create(old_next_tetrominos[0])
-                    
-                    # Create tetro from "Hold"
-                    hold_tetromino = Tetromino.create(hold_tetro)
-                    
-                    if debug: print("current tetro: "+str(old_next_tetrominos[0]))
-                    if debug: print("hold tetro   : "+str(hold_tetro))
-                    if debug: print("Next: "+str(next_tetrominos))
-
-                    # Calculate best drop with current and hold
-                    score,      best_column, best_rotation, best_occupations= field.calculate_best_drop(next_tetromino)
-                    hold_score, hold_column, hold_rotation, hold_occupations = field.calculate_best_drop(hold_tetromino)
-                    
-                    # Move tetro to best drop, this takes some time due to input delay
-                    if hold_score > score:
-                        if debug: print_occupations(hold_occupations)
-                        simulate_keypress("c")
-                        move(hold_tetromino, hold_column, hold_rotation)
-                    else:
-                        if debug: print_occupations(best_occupations)
-                        move(next_tetromino, best_column, best_rotation)
-                    # if debug: print("Best column, rotation: "+str(best_column)+", "+str(best_rotation))
-                    
-                    
-                    # pause after moving
-                    # simulate_keypress("p")
+                if debug: print("Initial occupations")
+                if debug: print_occupations(field.occupations)
                 
-        # except Exception as e:
-            # print(str(type(e))+" "+str(e))
-            # # break
-            
-            # # Have we lost, retry?
-            # calibrated = False
-            
-            # # Press new game
-            # time.sleep(2)
-            # simulate_keypress("z")
-            # # Skip adds
-            # time.sleep(5)
-            # for i in range(2):
+                # Current tetro is first from "Next" list of previous round
+                next_tetromino = Tetromino.create(old_next_tetrominos[0])
+                
+                # Create tetro from "Hold"
+                if hold_tetro:
+                    hold_tetromino = Tetromino.create(hold_tetro)
+                
+                if debug: print("")
+                if debug: print("current tetro: "+str(old_next_tetrominos[0]))
+                if debug: print("hold tetro   : "+str(hold_tetro))
+                if debug: print("Next: "+str(next_tetrominos))
+
+                # Calculate best drop with current
+                score, best_column, best_rotation, best_occupations,\
+                holes_score, avg_height_score, height_diff_score,\
+                placed_height_score, cleared_lines\
+                = field.calculate_best_drop(next_tetromino)
+                
+                # Calculate best drop with hold
+                hold_score, hold_column, hold_rotation, hold_occupations,\
+                hold_holes_score, hold_avg_height_score, hold_height_diff_score,\
+                hold_placed_height_score, hold_cleared_lines\
+                = field.calculate_best_drop(hold_tetromino)
+                
+                # Move tetro to best drop, current or hold
+                if score > hold_score:
+                
+                    move(next_tetromino, best_column, best_rotation, key_press_delay)
+                        
+                    last_cleared_lines = cleared_lines
+                    next_occupations   = best_occupations
+                    
+                    if debug:
+                        print("")
+                        print("best_score:          "+str(score))
+                        print("holes_score:         "+str(holes_score))
+                        print("avg_height_score:    "+str(avg_height_score))
+                        print("height_diff_score:   "+str(height_diff_score))
+                        print("placed_height_score: "+str(placed_height_score))
+                        print("cleared_lines:       "+str(cleared_lines))
+                        # print("Best column, rotation: "+str(best_column)+", "+str(best_rotation))
+                        print("best_occupations:")
+                        print_occupations(best_occupations) 
+
+                else:
+                
+                    # Change hold
+                    simulate_keypress("c")
+                    
+                    move(hold_tetromino, hold_column, hold_rotation, key_press_delay)
+                    
+                    last_cleared_lines = hold_cleared_lines
+                    next_occupations   = hold_occupations
+                    
+                    if debug:
+                        print("")
+                        print("Hold")
+                        print("best_score:          "+str(hold_score))
+                        print("holes_score:         "+str(hold_holes_score))
+                        print("avg_height_score:    "+str(hold_avg_height_score))
+                        print("height_diff_score:   "+str(hold_height_diff_score))
+                        print("placed_height_score: "+str(hold_placed_height_score))
+                        print("cleared_lines:       "+str(hold_cleared_lines))
+                        # print("Best column, rotation: "+str(best_column)+", "+str(best_rotation))
+                        print("best_occupations:")
+                        print_occupations(hold_occupations) 
+                
+                # pause after moving
                 # simulate_keypress("p")
-                # time.sleep(2)
-                # simulate_keypress("esc")
-            # time.sleep(5)
+                
+        except Exception as e:
+            print(str(type(e))+" "+str(e))
+            
+            # In case of doubt, hard drop
+            simulate_keypress("up_arrow")
+            
             
 
 if __name__=="__main__":
