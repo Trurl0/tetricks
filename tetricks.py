@@ -1,6 +1,6 @@
 
 
-from field import Field, print_occupations
+from field import Field, print_occupations, drop_tetromino
 from tetromino import Tetromino
 
 import numpy as np
@@ -12,6 +12,7 @@ import time
 import win32api, win32con, win32gui
 import threading
 import pickle
+import random
 
 
 # area of the screen where the look for the field
@@ -71,34 +72,18 @@ def simulate_keypress(key, key_delay=0.03):
     time.sleep(key_delay)
 
 
-def move(tetromino, column, rotation, key_delay=0.3):
+def move(h_move, r_move, play_hold, key_delay=0.3, fall=True):
     
-    # Initial position to calculate input needed to achieve final position
-    initial_j = 3
-    
-    # Very hacky: get initial position based on type and rotations 
-    if tetromino.letter == "O":
-        initial_j = 4
-    elif tetromino.letter == "I":
-        if rotation == 1:
-            initial_j = 5
-        elif rotation == 3:
-            initial_j = 3
-    # L, J, S, Z and T are similar
-    elif rotation == 1:
-            initial_j = 4
-    
-    # print("initial_j: "+str(initial_j))
-    
-    h_move = column - initial_j
-    # print("move: "+str(h_move))
-    # print("rotate: "+str(rotation))
-    
-    # Rotate always right for now
-    if rotation == 3:
-        simulate_keypress('z', key_delay)
+    if play_hold:
+        simulate_keypress("c", key_delay)
+                    
+    # Rotate
+    if r_move < 0:
+        r_move = -r_move
+        for i in range(r_move):
+            simulate_keypress('z', key_delay)
     else:
-        for i in range(rotation):
+        for i in range(r_move):
             simulate_keypress('x', key_delay)
         
     # Send keypresses with some delay and hard fall at the end
@@ -110,10 +95,76 @@ def move(tetromino, column, rotation, key_delay=0.3):
         # print(move_key+" "+str(i))
         simulate_keypress(move_key, key_delay)
 
-    # Hard fall at the end
-    simulate_keypress('up_arrow', key_delay)
+    if fall:
+        # Hard fall at the end
+        simulate_keypress('up_arrow', key_delay)
     
     
+def drop_current_tetro(fallen_tetro_letter, column, best_r_move, occupations):
+    """Correct occupations with falling tetro (create again as original was rotated in calculations)"""
+    fallen_tetro = Tetromino.create(fallen_tetro_letter)
+    if best_r_move < 0:
+        best_r_move = -best_r_move
+        for i in range(best_r_move):
+            fallen_tetro.rotate_left()
+    else:
+        for i in range(best_r_move):
+            fallen_tetro.rotate_right()
+            
+    next_occupations, _, _, _ = drop_tetromino(fallen_tetro, column, occupations)
+    
+    return next_occupations
+    
+
+def choose_curent_or_hold(next_letter, hold_letter, field):
+    play_hold = False
+
+    # Calculate best drop with current
+    score, best_h_move, best_r_move, best_occupations,\
+    holes_score, avg_height_score, height_diff_score,\
+    placed_height_score, cleared_lines, max_height, column\
+    = field.calculate_best_drop(Tetromino.create(next_letter))
+
+    if hold_letter:
+        # Calculate best drop with hold
+        hold_score, hold_h_move, hold_r_move, hold_occupations,\
+        hold_holes_score, hold_avg_height_score, hold_height_diff_score,\
+        hold_placed_height_score, hold_cleared_lines, hold_max_height, hold_column\
+        = field.calculate_best_drop(Tetromino.create(hold_letter))
+
+        # Play with hold if better
+        if hold_score > score:
+            play_hold = True
+            
+            # Change info to hold version 
+            next_letter =  hold_letter
+            
+            score, best_h_move, best_r_move, best_occupations,\
+            holes_score, avg_height_score, height_diff_score,\
+            placed_height_score, cleared_lines, max_height, column\
+            = hold_score, hold_h_move, hold_r_move, hold_occupations,\
+            hold_holes_score, hold_avg_height_score, hold_height_diff_score,\
+            hold_placed_height_score, hold_cleared_lines, hold_max_height, hold_column
+    
+    return next_letter, play_hold,\
+            score, best_h_move, best_r_move, best_occupations,\
+            holes_score, avg_height_score, height_diff_score,\
+            placed_height_score, cleared_lines, max_height, column
+     
+     
+def adapt_keypress_speed(max_height):
+    key_press_delay = 0
+    if max_height > 8:
+        key_press_delay = 0.02
+    elif max_height > 6:
+        key_press_delay = 0.025
+    elif max_height > 4:
+        key_press_delay = 0.03
+    else:
+        key_press_delay = 0.08
+    return key_press_delay
+        
+        
 def is_new_round(old_next_tetrominos, next_tetrominos):
     # If the "next" list changes it is a new round 
     # Ignoring the case of four equal tetros in succession, is even possible?
@@ -125,6 +176,269 @@ def is_new_round(old_next_tetrominos, next_tetrominos):
     return next_changed
 
 
+def screen_thread(screenshot, bounding_box, field, debug):
+    """Thread to constantly update the screen image"""
+    
+    global img_array
+    global calibrated
+    while True:
+        # Capture image
+        img_array = np.array(screenshot.grab(bounding_box))
+            
+        if debug and calibrated:
+            # Show field debug lines
+            debug_img = copy.deepcopy(img_array)
+            field.debug_playing_area(debug_img)
+            cv2.imshow('screen', debug_img)
+            cv2.moveWindow("screen", 1000,0);
+            
+            # Save last imgs for replay
+            # img_array_history.append(debug_img)
+            # if len(img_array_history) > 100:
+                # img_array_history.pop(0)
+            
+        else:
+            # Show raw image
+            cv2.imshow('screen', img_array)
+            cv2.moveWindow("screen", 1000,0);
+            
+        time.sleep(0.01)
+        
+        if (cv2.waitKey(1) & 0xFF) == ord('q'):
+            cv2.destroyAllWindows()
+            break
+            
+        # Show image
+        cv2.imshow('screen', img_array)
+        
+        
+def play_simulation(holes_weight, placed_height_weight, max_height_weight, avg_height_weight,\
+                     height_diff_weight, non_tetris_line_weight, tetris_weight, move_weight):
+    """Play without a real board"""
+
+    debug = False
+
+    # This is the playing field
+    field = Field(holes_weight, placed_height_weight, max_height_weight, avg_height_weight,\
+                   height_diff_weight, non_tetris_line_weight, tetris_weight, move_weight)
+    
+    hold_tetro = random.choice(Tetromino.TYPES)
+    
+    """Tetromino generation is suffle one of each pieces and draw until empty"""
+    next_tetros = ['I', 'O', 'T', 'S', 'Z', 'J', 'L']
+    random.shuffle(next_tetros)
+    
+    rounds = 0
+    game_score = 0
+    max_allowed_height = 18 # Reaching this high means death
+    while True:
+        rounds += 1
+
+        try:
+            next_tetromino = next_tetros.pop(0)
+        except:
+            next_tetros = ['I', 'O', 'T', 'S', 'Z', 'J', 'L']
+            random.shuffle(next_tetros)
+            next_tetromino = next_tetros.pop(0)
+        
+        # Choose best next move with current or hold
+        fallen_tetro_letter, play_hold,\
+        score, best_h_move, best_r_move, best_occupations,\
+        holes_score, avg_height_score, height_diff_score,\
+        placed_height_score, cleared_lines, max_height, column\
+         = choose_curent_or_hold(next_tetromino, hold_tetro, field)
+        
+        if play_hold:
+            hold_tetro = next_tetromino
+            
+        # Updated with calculated occupations
+        field.occupations = copy.deepcopy(best_occupations)
+        
+        # lines score (normally multiplied by level, but no need)
+        if   cleared_lines == 1: game_score += 100
+        elif cleared_lines == 2: game_score += 300
+        elif cleared_lines == 3: game_score += 500
+        elif cleared_lines == 4:
+            if last_cleared_lines == 4:
+                game_score += 1600
+            else:
+                game_score += 800
+        last_cleared_lines = cleared_lines
+        
+        # Lose condition
+        if(max_height > max_allowed_height):
+            break
+            
+        if debug:
+            # print("\nROUND "+str(rounds))
+            # print("current tetro: "+str(fallen_tetro_letter))
+            # print("hold tetro   : "+str(hold_tetro))
+            # print("play_hold    : "+str(play_hold))
+            # print("Initial occupations")
+            # print_occupations(field.occupations)
+            # print("best_score:          "+str(score))
+            # print("holes_score:         "+str(holes_score))
+            # print("avg_height_score:    "+str(avg_height_score))
+            # print("height_diff_score:   "+str(height_diff_score))
+            # print("placed_height_score: "+str(placed_height_score))
+            # print("cleared_lines:       "+str(cleared_lines))
+            print_occupations(field.occupations) 
+        
+    return game_score, rounds 
+       
+       
+def play(holes_weight, placed_height_weight, max_height_weight, avg_height_weight,\
+            height_diff_weight, non_tetris_line_weight, tetris_weight, move_weight):
+
+    # Globals for screen recognition thread
+    global calibrated
+    global img_array
+    # global img_array_history
+    # img_array_history = []  # keep last imgs for replay
+    
+    # Runtime config
+    debug = True
+    key_press_delay = 0.05
+    
+    # Control flags
+    calibrated         = False
+    started            = False
+    last_cleared_lines = 0
+    next_occupations   = None
+
+    # None to calibrate for a new field
+    # calibration = None
+    # calibration = ((154, 318), (569, 1186), (70, 413), [(653, 414), (656, 502), (652, 593)])    # royale
+    calibration = ((150, 288), (576, 1172), (69, 388), [(659, 390), (659, 478), (659, 570)])  # single player
+    
+    # This is the playing field
+    field = Field(holes_weight, placed_height_weight, max_height_weight, avg_height_weight,\
+                   height_diff_weight, non_tetris_line_weight, tetris_weight, move_weight)
+    
+    # Start with random next tetrominos
+    next_tetrominos     = ["O", "O", "O"]
+
+    # To take screenshots continually
+    screenshot = mss()
+    img_array = np.array(screenshot.grab(bounding_box))
+    img_thread = threading.Thread(target=screen_thread, args=(screenshot, bounding_box, field, debug), daemon=True)
+    img_thread.start()
+    
+    
+    # To have time to click tetris window
+    time.sleep(1)
+
+    # Manual calibration
+    if calibration is None:
+        calibration = field.calibrate_manually(img_array)
+        print(calibration)
+
+    # Create field recognition array
+    calibrated = field.set_playing_area(*calibration)
+    print ("Calibrated: "+str(calibrated))
+
+    # PLAY FIRST ROUND
+    rounds = 0
+    if debug: print("\n\nROUND "+str(rounds))
+    
+    next_tetrominos, hold_tetro = field.get_next_tetrominos(img_array)
+    old_next_tetrominos = copy.deepcopy(next_tetrominos)
+    
+    # Hold first tetro, start playing with the next
+    simulate_keypress("c", key_press_delay)
+    
+    # Get real occupations in case we start mid-game
+    time.sleep(0.1)
+    field.get_occupations_from_screen(img_array)
+    
+    # Choose best next move with current or hold
+    fallen_tetro_letter, play_hold,\
+    score, best_h_move, best_r_move, best_occupations,\
+    holes_score, avg_height_score, height_diff_score,\
+    placed_height_score, cleared_lines, max_height, column\
+     = choose_curent_or_hold(next_tetrominos[0], hold_tetro, field)
+    
+    while True:
+        
+        # try:
+            
+            # Update "Next" list continuously to check when is next round
+            old_next_tetrominos = copy.deepcopy(next_tetrominos)
+            next_tetrominos, hold_tetro = field.get_next_tetrominos(img_array)
+            
+            if is_new_round(old_next_tetrominos, next_tetrominos) and "Unknown" not in old_next_tetrominos[1]:
+                rounds += 1
+                if debug: print("\n\nROUND "+str(rounds))
+            
+                # For each round, start moving the already calculated movement
+                # Think the next movement while the current piece is falling in its final position
+                # This way no time is lost thinking
+                
+                # Move tetro to best drop, don't make it fall yet
+                move(best_h_move, best_r_move, play_hold, key_press_delay, False)
+                             
+                # Hack: when clearing lines the text messes with occupation detection
+                # In that case, use calculated ocupations for the next round
+                if cleared_lines:
+                    field.occupations = copy.deepcopy(best_occupations)    
+                else:
+                    # Get occupations, ignoring floating tetro
+                    field.get_occupations_from_screen(img_array)
+                    # Correct with fallen tetro
+                    field.occupations = drop_current_tetro(fallen_tetro_letter, column, best_r_move, field.occupations)
+                
+                # Hard drop tetro now
+                simulate_keypress('up_arrow', key_press_delay)
+                
+                # Update hold tetro in case we have used it
+                _, hold_tetro = field.get_next_tetrominos(img_array)
+            
+                # Choose best move with current or hold
+                fallen_tetro_letter, play_hold,\
+                score, best_h_move, best_r_move, best_occupations,\
+                holes_score, avg_height_score, height_diff_score,\
+                placed_height_score, cleared_lines, max_height, column\
+                 = choose_curent_or_hold(old_next_tetrominos[1], hold_tetro, field)
+                
+                if debug:
+                    print("current tetro: "+str(old_next_tetrominos[0]))
+                    print("hold tetro   : "+str(hold_tetro))
+                    print("play_hold    : "+str(play_hold))
+                    print("Next: "+str(next_tetrominos))
+                    # print("Initial occupations")
+                    # print_occupations(field.occupations)
+                    print("best_score:          "+str(score))
+                    print("holes_score:         "+str(holes_score))
+                    print("avg_height_score:    "+str(avg_height_score))
+                    print("height_diff_score:   "+str(height_diff_score))
+                    print("placed_height_score: "+str(placed_height_score))
+                    print("cleared_lines:       "+str(cleared_lines))
+                    # print("Best column, rotation: "+str(best_column)+", "+str(best_rotation))
+                    # print("occupations:")
+                    # print_occupations(field.occupations) 
+                    # print("best_occupations:")
+                    # print_occupations(best_occupations) 
+                
+                # pause after moving
+                # simulate_keypress("p")
+                
+            elif "Unknown" in old_next_tetrominos[0]:
+                print(old_next_tetrominos[0])
+                time.sleep(0.1)
+                
+        # except Exception as e:
+            # print(str(type(e))+" "+str(e))
+            # time.sleep(0.5)
+            
+            # Save replay on exit
+            # with open('testricks.pkl', 'wb') as f:
+                # pickle.dump(img_array_history, f)
+            # break
+            
+            # In case of doubt, hard drop
+            # simulate_keypress("up_arrow")
+            
+            
 def test():
 
     # This is the playing field
@@ -173,198 +487,46 @@ def test():
     print_occupations(field_copy.occupations)
     
     print(field_copy.get_heuristics(field_copy.occupations))
-           
-def play():
+          
 
-    # Runtime config
-    debug = True
-    key_press_delay = 0.028
-    # key_press_delay = 0.1
+def replay():
+    with open('testricks.pkl', 'rb') as f:
+        mynewlist = pickle.load(f)
     
-    # None if you want to calibrate for a new field
-    # calibration = None
-    # royale
-    calibration = ((154, 318), (569, 1186), (70, 413), [(652, 414), (656, 502), (652, 593)])
-    # single player
-    # calibration = ((150, 288), (576, 1172), (69, 388), [(659, 390), (659, 478), (659, 570)])
-
-    # Control flags
-    global calibrated
-    calibrated         = False
-    started            = False
-    last_cleared_lines = 0
-    next_occupations = None
-
-
-    # To take screenshots
-    screenshot = mss()
-
-    # This is the playing field
-    field = Field()
-    
-    # Start with random next tetrominos
-    next_tetrominos = ["O", "O", "O"]
-        
-    global img_array
-    img_array = np.array(screenshot.grab(bounding_box))
-    
-    # Thread to constantly update the screen image
-    def screen_thread():
-        global img_array
-        global calibrated
+        counter = 0
         while True:
-            # Capture image
-            img_array = np.array(screenshot.grab(bounding_box))
+            
+            counter += 1
+            if counter > len(mynewlist)-1:
+                counter = 0
                 
-            if debug and calibrated:
-                # Show field debug lines
-                debug_img = copy.deepcopy(img_array)
-                field.debug_playing_area(debug_img)
-                cv2.imshow('screen', debug_img)
-            else:
-                # Show raw image
-                cv2.imshow('screen', img_array)
-                    
+            img_array = mynewlist[counter]
+            # Show raw image
+            cv2.imshow('screen', img_array)
+            
+            time.sleep(0.5)
             if (cv2.waitKey(1) & 0xFF) == ord('q'):
                 cv2.destroyAllWindows()
                 break
                 
-            # Show image
-            cv2.imshow('screen', img_array)
-            
-    img_thread = threading.Thread(target=screen_thread, daemon=True)
-    img_thread.start()
-    
-    # To have time to click tetris window
-    time.sleep(1)
-
-    if not calibrated:
-    
-        if calibration is None:
-            calibration = field.calibrate_manually(img_array)
-            print(calibration)
-        
-        calibrated = field.set_playing_area(*calibration)
-        
-        print ("Calibrated")
-    
-    round_time = time.time()
-    while True:
-            # continue
-        
-        try:
-            # Update "Next" list to see if is next round
-            old_next_tetrominos = copy.deepcopy(next_tetrominos)
-            next_tetrominos, hold_tetro = field.get_next_tetrominos(img_array)
-            
-            if not started:
-                started = True
                 
-                # Hold first piece, start playing with the next
-                simulate_keypress("c")
-                
-                # Update next list
-                old_next_tetrominos, hold_tetro = field.get_next_tetrominos(img_array)
-                
-            elif is_new_round(old_next_tetrominos, next_tetrominos):
-                print("round_time: "+str(time.time()-round_time))
-                round_time = time.time()
-                
-                # Time to update occupations
-                time.sleep(0.08)
-                
-                if debug: print("\n\nNEW ROUND\n")
-                    
-                # Hack: when clearing lines the text messes with occupation detection
-                # In that case, use calculated ocupations for the next round
-                if last_cleared_lines:
-                    field.occupations = copy.deepcopy(next_occupations)
-                else:
-                    # Get occupations, ignoring floating tetros
-                    field.get_occupations_from_screen(img_array)
-                    
-                if debug: print("Initial occupations")
-                if debug: print_occupations(field.occupations)
-                
-                # Current tetro is first from "Next" list of previous round
-                next_tetromino = Tetromino.create(old_next_tetrominos[0])
-                
-                # Create tetro from "Hold"
-                if hold_tetro:
-                    hold_tetromino = Tetromino.create(hold_tetro)
-                
-                if debug: print("")
-                if debug: print("current tetro: "+str(old_next_tetrominos[0]))
-                if debug: print("hold tetro   : "+str(hold_tetro))
-                if debug: print("Next: "+str(next_tetrominos))
-
-                # Calculate best drop with current
-                score, best_column, best_rotation, best_occupations,\
-                holes_score, avg_height_score, height_diff_score,\
-                placed_height_score, cleared_lines\
-                = field.calculate_best_drop(next_tetromino)
-                
-                # Calculate best drop with hold
-                hold_score, hold_column, hold_rotation, hold_occupations,\
-                hold_holes_score, hold_avg_height_score, hold_height_diff_score,\
-                hold_placed_height_score, hold_cleared_lines\
-                = field.calculate_best_drop(hold_tetromino)
-                
-                # Move tetro to best drop, current or hold
-                if score > hold_score:
-                
-                    move(next_tetromino, best_column, best_rotation, key_press_delay)
-                        
-                    last_cleared_lines = cleared_lines
-                    next_occupations   = best_occupations
-                    
-                    if debug:
-                        print("")
-                        print("best_score:          "+str(score))
-                        print("holes_score:         "+str(holes_score))
-                        print("avg_height_score:    "+str(avg_height_score))
-                        print("height_diff_score:   "+str(height_diff_score))
-                        print("placed_height_score: "+str(placed_height_score))
-                        print("cleared_lines:       "+str(cleared_lines))
-                        # print("Best column, rotation: "+str(best_column)+", "+str(best_rotation))
-                        print("best_occupations:")
-                        print_occupations(best_occupations) 
-
-                else:
-                
-                    # Change hold
-                    simulate_keypress("c")
-                    
-                    move(hold_tetromino, hold_column, hold_rotation, key_press_delay)
-                    
-                    last_cleared_lines = hold_cleared_lines
-                    next_occupations   = hold_occupations
-                    
-                    if debug:
-                        print("")
-                        print("Hold")
-                        print("best_score:          "+str(hold_score))
-                        print("holes_score:         "+str(hold_holes_score))
-                        print("avg_height_score:    "+str(hold_avg_height_score))
-                        print("height_diff_score:   "+str(hold_height_diff_score))
-                        print("placed_height_score: "+str(hold_placed_height_score))
-                        print("cleared_lines:       "+str(hold_cleared_lines))
-                        # print("Best column, rotation: "+str(best_column)+", "+str(best_rotation))
-                        print("best_occupations:")
-                        print_occupations(hold_occupations) 
-                
-                # pause after moving
-                # simulate_keypress("p")
-                
-        except Exception as e:
-            print(str(type(e))+" "+str(e))
-            
-            # In case of doubt, hard drop
-            simulate_keypress("up_arrow")
-            
-            
-
 if __name__=="__main__":
+    
+    holes_weight           = 80  
+    placed_height_weight   = 3   
+    max_height_weight      = 0   
+    avg_height_weight      = 6   
+    height_diff_weight     = 3   
+    non_tetris_line_weight = 40  
+    tetris_weight          = 1000
+    move_weight            = 1   
 
-    play()
+    # play(holes_weight, placed_height_weight, max_height_weight, avg_height_weight,\
+                    # height_diff_weight,non_tetris_line_weight, tetris_weight, move_weight)
+    
+    print(play_simulation(holes_weight, placed_height_weight, max_height_weight, avg_height_weight,\
+                    height_diff_weight,non_tetris_line_weight, tetris_weight, move_weight))
+    
+    # replay()
+    
     # test()

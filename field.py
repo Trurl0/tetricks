@@ -43,7 +43,128 @@ def detect_tetromino(img_array, loc):
 def print_occupations(occupations):
     # print to cmd
     for i in range(20):
-        print([str(x).replace("True", "X").replace("False", " ") for x in occupations[i]])
+        print([str(x).replace("True", "O").replace("False", " ") for x in occupations[i]])
+
+
+def calculate_move(tetromino, column, rotation):
+
+    # Initial position to calculate input needed to achieve final position
+    initial_j = 3
+    
+    # Very hacky: get initial position based on type and rotations 
+    if tetromino.letter == "O":
+        initial_j = 4
+    elif tetromino.letter == "I":
+        if rotation == 1:
+            initial_j = 5
+        elif rotation == 3:
+            initial_j = 4    # Leftwise rotation is different than three rights
+    # L, J, S, Z and T are similar
+    elif rotation == 1:
+            initial_j = 4
+            
+    h_move = column - initial_j
+    
+    r_move = rotation
+    if rotation == 3:
+        r_move = -1
+    
+    return h_move, r_move
+
+
+def check_cleared_lines(occupations, placed_tetromino, placed_tetro_height):
+    # Check if the placed tetro clears some lines
+    cleared_lines = []
+    for i in range(placed_tetro_height, placed_tetro_height+placed_tetromino.height()):
+        if all(occupations[i]):
+            cleared_lines.append(i)
+            
+    # Remove cleared lines from occupations
+    for i in cleared_lines:
+    
+        # Remove cleared line
+        occupations.pop(i)   
+        
+        # Add empty one on top
+        occupations.insert(0, [False, False, False, False, False, False, False, False, False, False])  
+        
+    return len(cleared_lines), occupations
+
+
+def place_tetromino(tetromino, occupations, field_i, field_j):
+    # occupy field with tetronimo in definitive position
+    # Assumption: the tetro is in a verified final position
+    for i, row in enumerate(tetromino.body):
+        for j, occupied in enumerate(row):
+            if occupied:
+                occupations[i+field_i][j+field_j] = True
+                  
+             
+def drop_tetromino(tetromino, drop_j, occupations):
+
+    # Drop a copy of the tetromino on the field
+    temp_tetromino = tetromino.copy()
+    
+    # Drop until floor, keep last valid position
+    last_valid_i = 0
+    try:
+        for drop_i in range(21 - tetromino.height()):
+            # print("drop: "+str(drop_i)+", "+str(drop_j))
+        
+            # Stop at occupation
+            for i, row in enumerate(tetromino.body):
+                for j, occupied in enumerate(row):
+                    if occupied:
+                        # print("Checking "+str(drop_i+i)+", "+str(drop_j+j))
+                        if occupations[drop_i+i][drop_j+j]:
+                            # print("Collision "+str(drop_i)+", "+str(drop_j))
+                            raise StopIteration # Break of nested loop
+                            
+            # Save only if no collision
+            last_valid_i = drop_i
+            
+    except StopIteration: pass
+
+    # place dropped tetro in test board test_occupations
+    place_tetromino(temp_tetromino, occupations, last_valid_i, drop_j)
+    
+    # Clean cleared lines
+    cleared_lines, occupations = check_cleared_lines(occupations, temp_tetromino, last_valid_i)
+    
+    return occupations, temp_tetromino, last_valid_i, cleared_lines
+           
+           
+def get_heights_and_holes(occupations):
+    # Together to optimize search
+
+    holes = 0
+    column_heights     = []  # Height of each column (10 entries, one per column)
+    column_height_diff = []  # Height diff between a column and the next (9 entries, between columns)
+    
+    # Iterate all columns
+    for j in range(10):            
+    
+        first_occupation = False
+        for i in range(20):
+            if occupations[i][j]:
+            
+                # Store the height of this column
+                if not first_occupation:
+                    column_heights.append(20-i)
+                first_occupation = True
+                    
+                if j>0:
+                    column_height_diff.append(abs(column_heights[j] -  column_heights[j-1]))
+                    
+                    
+            elif first_occupation:
+                holes += 1
+                
+        # Empty column
+        if not first_occupation:
+            column_heights.append(0)
+             
+    return column_heights, column_height_diff, holes     
 
 
 class ScreenPosition:
@@ -53,23 +174,26 @@ class ScreenPosition:
             
 
 class Field:
-    def __init__(self):
+    def __init__(self, holes_weight, placed_height_weight, max_height_weight, avg_height_weight, height_diff_weight,\
+                    non_tetris_line_weight, tetris_weight, move_weight):
         # Create playing field of 20*10
         self.width  = 10
         self.height = 20
         
         # Information to use in the next round
-        self.holes            = 0
+        self.holes = 0
         
-        # TODO: calibrate weight for heuristics
-        self.holes_weight           = 100
-        self.placed_height_weight   = 1
-        self.avg_height_weight      = 4
-        self.height_diff_weight     = 3
-        self.non_tetris_line_weight = 40
-        self.tetris_weight          = 1000
+        # Score weights for heuristics
+        self.holes_weight           = holes_weight            # 80   # Holes are very bad
+        self.placed_height_weight   = placed_height_weight    # 3     # Lowest placement of current tetro, redundant?
+        self.max_height_weight      = max_height_weight       # 0     # Lowest max height
+        self.avg_height_weight      = avg_height_weight       # 6     # Lower is better
+        self.height_diff_weight     = height_diff_weight      # 3     # Smooth surface is better
+        self.non_tetris_line_weight = non_tetris_line_weight  # 40    # Lines are bad unless we need to clear holes
+        self.tetris_weight          = tetris_weight           # 1000  # Tetris is goood
+        self.move_weight            = move_weight             # 1     # Less moves are better
         
-        # Calibrated just once at the start of the game
+        # Screen coordinates set at the start of the game
         self.up_left_corner    = None
         self.down_right_corner = None
         self.hold_pos          = None
@@ -82,7 +206,7 @@ class Field:
             
         self.occupations = []  
         for i in range(20):
-            self.occupations.append([None, None, None, None, None, None, None, None, None, None])
+            self.occupations.append([False, False, False, False, False, False, False, False, False, False])
         
     def calibrate_manually(self, img_array):
         
@@ -234,101 +358,11 @@ class Field:
         
         return next_tetrominos, hold_tetromino
 
-    def place_tetromino(self, tetromino, occupations, field_i, field_j):
-        # occupy field with tetronimo in definitive position
-        # Assumption: the tetro is in a verified final position
-        for i, row in enumerate(tetromino.body):
-            for j, occupied in enumerate(row):
-                if occupied:
-                    occupations[i+field_i][j+field_j] = True
-                  
-    def drop_tetromino(self, tetromino, drop_j, occupations):
+    def get_heuristics(self, occupations, placed_tetromino, placed_tetro_height, cleared_lines, move_number):
 
-        # Drop a copy of the tetromino on the field
-        temp_tetromino = tetromino.copy()
+        column_heights, column_height_diff, holes = get_heights_and_holes(occupations)
         
-        # Drop until floor, keep last valid position
-        last_valid_i = 0
-        try:
-            for drop_i in range(21 - tetromino.height()):
-                # print("drop: "+str(drop_i)+", "+str(drop_j))
-            
-                # Stop at occupation
-                for i, row in enumerate(tetromino.body):
-                    for j, occupied in enumerate(row):
-                        if occupied:
-                            # print("Checking "+str(drop_i+i)+", "+str(drop_j+j))
-                            if occupations[drop_i+i][drop_j+j]:
-                                # print("Collision "+str(drop_i)+", "+str(drop_j))
-                                raise StopIteration # Break of nested loop
-                                
-                # Save only if no collision
-                last_valid_i = drop_i
-                
-        except StopIteration: pass
-    
-        # place dropped tetro in test board test_occupations
-        self.place_tetromino(temp_tetromino, occupations, last_valid_i, drop_j)
-        
-        # Clean cleared lines
-        cleared_lines, occupations = self.check_cleared_lines(occupations, temp_tetromino, last_valid_i)
-        
-        return occupations, temp_tetromino, last_valid_i, cleared_lines
-        
-    def get_heights_and_holes(self, occupations):
-        # Together to optimize search
-
-        holes = 0
-        column_heights     = []  # Height of each column (10 entries, one per column)
-        column_height_diff = []  # Height diff between a column and the next (9 entries, between columns)
-        
-        # Iterate all columns
-        for j in range(10):            
-        
-            first_occupation = False
-            for i in range(20):
-                if occupations[i][j]:
-                
-                    # Store the height of this column
-                    if not first_occupation:
-                        column_heights.append(20-i)
-                    first_occupation = True
-                        
-                    if j>0:
-                        column_height_diff.append(abs(column_heights[j] -  column_heights[j-1]))
-                        
-                        
-                elif first_occupation:
-                    holes += 1
-                    
-            # Empty column
-            if not first_occupation:
-                column_heights.append(0)
-                 
-        return column_heights, column_height_diff, holes     
-
-    def check_cleared_lines(self, occupations, placed_tetromino, placed_tetro_height):
-        # Check if the placed tetro clears some lines
-        cleared_lines = []
-        for i in range(placed_tetro_height, placed_tetro_height+placed_tetromino.height()):
-            if all(occupations[i]):
-                cleared_lines.append(i)
-                
-        # Remove cleared lines from occupations
-        for i in cleared_lines:
-            # Remove cleared line
-            occupations.pop(i)   
-            
-            # Add empty one on top
-            occupations.insert(0, [False, False, False, False, False, False, False, False, False, False])  
-            
-        return len(cleared_lines), occupations
-    
-    def get_heuristics(self, occupations, placed_tetromino, placed_tetro_height, cleared_lines):
-
-        column_heights, column_height_diff, holes = self.get_heights_and_holes(occupations)
-        
-        max_height      = min(column_heights)
+        max_height      = max(column_heights)
         avg_height      = sum(column_heights)/10
         new_holes       = holes - self.holes
         avg_height_diff = sum(column_height_diff)/10
@@ -338,19 +372,23 @@ class Field:
         #-----------------------------------#
         score = 0
         
-        # Decrease average height (higher number means lower column)
-        # QUadratical impact
+        # Decrease average height, quadratical impact
         score -= avg_height * avg_height * (self.avg_height_weight)
         
         # Choose lowest placement
-        # QUadratical impact
         score -= (20-placed_tetro_height) * (self.placed_height_weight)
+        
+        # Choose lowest placement
+        score -= max_height * max_height  * (self.max_height_weight)
         
         # Try not to make new holes
         score -= new_holes           * (self.holes_weight)
         
         # Try to make the surface as smooth as possible
         score -= avg_height_diff     * (self.height_diff_weight)
+        
+        # Less moves are better
+        score -= move_number         * (self.move_weight)
                                
         # Tetris is very good
         if cleared_lines == 4:
@@ -358,7 +396,7 @@ class Field:
             
         else:
             # If there are existing holes, clean them
-            # Important not to check new holes, or we would try to generate holes to make lines positive!
+            # Important not to check new holes, or we would try to generate holes to make line score positive!
             if self.holes:
                 score += cleared_lines * self.non_tetris_line_weight
                 
@@ -370,7 +408,7 @@ class Field:
         #-----------------------------------#
         
         # return everyting for info purposes
-        return score, avg_height, avg_height_diff, holes, new_holes, cleared_lines
+        return score, max_height, avg_height, avg_height_diff, holes, new_holes, cleared_lines
         
     def calculate_best_drop(self,tetromino):
         # Assumptions:
@@ -378,6 +416,10 @@ class Field:
         
         best_column        = 0
         best_rotation      = 0
+        
+        best_h_move        = 0
+        best_r_move        = 0
+        
         best_score         = None
         best_height_sum    = None
         best_height_diff   = None
@@ -386,26 +428,36 @@ class Field:
         best_occupations   = None
         best_cleared_lines = None
         
+        
         # Test drop in every column and rotation
         for rotation in range(4):
             for column in range(self.width - tetromino.width() + 1):
                 
                 # Simulate placing a tetro in final position in a copy of the board
                 test_occupations, temp_tetromino, placed_tetro_height, cleared_lines\
-                = self.drop_tetromino(tetromino, column, copy.deepcopy(self.occupations))
+                = drop_tetromino(tetromino, column, copy.deepcopy(self.occupations))
+                
+                # Calculate input
+                # This could be done only once with best move if we didn't want to use it for score
+                h_move, r_move = calculate_move(temp_tetromino, column, rotation)
+                
+                # Number of key presses needed
+                move_number = abs(h_move) + abs(r_move) 
                 
                 # Calculate score on the simulated field
-                score, avg_height, avg_height_diff, holes, new_holes, cleared_lines\
-                = self.get_heuristics(test_occupations, temp_tetromino, placed_tetro_height, cleared_lines)
+                score, max_height, avg_height, avg_height_diff, holes, new_holes, cleared_lines\
+                = self.get_heuristics(test_occupations, temp_tetromino, placed_tetro_height, cleared_lines, move_number)
                 
                 # Keep movement with better heuristics
                 if best_score is None or score > best_score:
-                    # print("new best: "+str(heuristics)+", col "+str(column)+", rot "+str(rotation))
+                    best_h_move        = h_move
+                    best_r_move        = r_move
                     best_score         = score
                     best_column        = column
                     best_rotation      = rotation
                     best_occupations   = test_occupations
                     best_avg_height    = avg_height
+                    best_max_height    = max_height
                     best_height_diff   = avg_height_diff
                     best_placed_height = placed_tetro_height
                     best_holes         = holes
@@ -417,11 +469,16 @@ class Field:
             
                 
         # Update future holes and occupations
-        self.holes            = best_holes
+        self.holes = best_holes
             
-        return best_score, best_column, best_rotation, best_occupations,\
-                best_new_holes     * self.holes_weight,\
-                best_avg_height    * self.avg_height_weight,\
-                best_height_diff   * self.height_diff_weight,\
-                best_placed_height * self.placed_height_weight,\
-                best_cleared_lines * self.non_tetris_line_weight
+        return best_score         ,\
+                best_h_move       ,\
+                best_r_move       ,\
+                best_occupations  ,\
+                best_new_holes    ,\
+                best_avg_height   ,\
+                best_height_diff  ,\
+                best_placed_height,\
+                best_cleared_lines,\
+                best_max_height   ,\
+                best_column
