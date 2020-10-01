@@ -65,9 +65,8 @@ win32_key_codes = {
 }
 
 
-def simulate_keypress(key, key_delay=0.03):
+def simulate_keypress(key, key_delay=0.05):
     win32api.keybd_event(win32_key_codes[key], 0,0,0)
-    time.sleep(key_delay)
     win32api.keybd_event(win32_key_codes[key],0 ,win32con.KEYEVENTF_KEYUP ,0)
     time.sleep(key_delay)
 
@@ -202,7 +201,7 @@ def screen_thread(screenshot, bounding_box, field, debug):
             cv2.imshow('screen', img_array)
             cv2.moveWindow("screen", 1000,0);
             
-        time.sleep(0.01)
+        # time.sleep(0.01)
         
         if (cv2.waitKey(1) & 0xFF) == ord('q'):
             cv2.destroyAllWindows()
@@ -212,7 +211,7 @@ def screen_thread(screenshot, bounding_box, field, debug):
         cv2.imshow('screen', img_array)
         
         
-def play_simulation(holes_weight, placed_height_weight, max_height_weight, avg_height_weight,\
+def play_simulation(max_rounds, holes_weight, placed_height_weight, max_height_weight, avg_height_weight,\
                      height_diff_weight, non_tetris_line_weight, tetris_weight, move_weight):
     """Play without a real board"""
 
@@ -255,18 +254,19 @@ def play_simulation(holes_weight, placed_height_weight, max_height_weight, avg_h
         field.occupations = copy.deepcopy(best_occupations)
         
         # lines score (normally multiplied by level, but no need)
-        if   cleared_lines == 1: game_score += 100
-        elif cleared_lines == 2: game_score += 300
-        elif cleared_lines == 3: game_score += 500
+        # Exagerate points for multiple lines quadratically to tip evolution
+        if   cleared_lines == 1: game_score += 10
+        elif cleared_lines == 2: game_score += 30*30
+        elif cleared_lines == 3: game_score += 50*50
         elif cleared_lines == 4:
             if last_cleared_lines == 4:
-                game_score += 1600
+                game_score += 240*240
             else:
-                game_score += 800
+                game_score += 120*120
         last_cleared_lines = cleared_lines
         
         # Lose condition
-        if(max_height > max_allowed_height):
+        if (rounds >= max_rounds) or (max_height >= max_allowed_height):
             break
             
         if debug:
@@ -297,7 +297,7 @@ def play(holes_weight, placed_height_weight, max_height_weight, avg_height_weigh
     # img_array_history = []  # keep last imgs for replay
     
     # Runtime config
-    debug = True
+    debug = False
     key_press_delay = 0.05
     
     # Control flags
@@ -308,8 +308,8 @@ def play(holes_weight, placed_height_weight, max_height_weight, avg_height_weigh
 
     # None to calibrate for a new field
     # calibration = None
-    # calibration = ((154, 318), (569, 1186), (70, 413), [(653, 414), (656, 502), (652, 593)])    # royale
-    calibration = ((150, 288), (576, 1172), (69, 388), [(659, 390), (659, 478), (659, 570)])  # single player
+    calibration = ((154, 318), (569, 1186), (70, 413), [(653, 414), (656, 502), (652, 593)])    # royale
+    # calibration = ((150, 288), (576, 1172), (69, 388), [(659, 390), (659, 478), (659, 570)])  # single player
     
     # This is the playing field
     field = Field(holes_weight, placed_height_weight, max_height_weight, avg_height_weight,\
@@ -336,6 +336,7 @@ def play(holes_weight, placed_height_weight, max_height_weight, avg_height_weigh
     # Create field recognition array
     calibrated = field.set_playing_area(*calibration)
     print ("Calibrated: "+str(calibrated))
+
 
     # PLAY FIRST ROUND
     rounds = 0
@@ -511,7 +512,7 @@ def replay():
                 
                 
 if __name__=="__main__":
-    
+
     holes_weight           = 80  
     placed_height_weight   = 3   
     max_height_weight      = 0   
@@ -520,13 +521,22 @@ if __name__=="__main__":
     non_tetris_line_weight = 40  
     tetris_weight          = 1000
     move_weight            = 1   
-
-    # play(holes_weight, placed_height_weight, max_height_weight, avg_height_weight,\
-                    # height_diff_weight,non_tetris_line_weight, tetris_weight, move_weight)
     
-    print(play_simulation(holes_weight, placed_height_weight, max_height_weight, avg_height_weight,\
-                    height_diff_weight,non_tetris_line_weight, tetris_weight, move_weight))
+    # holes_weight           = 73.6390630178657
+    # placed_height_weight   = 5.517834412431974
+    # max_height_weight      = 0
+    # avg_height_weight      = 1.379599196058635
+    # height_diff_weight     = 11.5966287707579
+    # non_tetris_line_weight = 34.345980102465255
+    # tetris_weight          = 1001.655733093382
+    # move_weight            = 1
+    
+    play(holes_weight, placed_height_weight, max_height_weight, avg_height_weight,\
+                    height_diff_weight, non_tetris_line_weight, tetris_weight, move_weight)
+    
+    # max_rounds = 1000
+    # print(play_simulation(max_rounds, holes_weight, placed_height_weight, max_height_weight, avg_height_weight,\
+                    # height_diff_weight,non_tetris_line_weight, tetris_weight, move_weight))
     
     # replay()
-    
     # test()

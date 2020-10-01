@@ -334,13 +334,16 @@ class Field:
                 break
                 
         # Delete all occupations over it
+        floating_occupations = []
         if empty_line:
             # print("Delete above line "+str(empty_line))
             for i in range(empty_line, -1, -1):
                 # print("Delete line "+str(i))
                 for j in range(10):
+                    if self.occupations[i][j]:
+                        floating_occupations.append((i, j))
                     self.occupations[i][j] = False
-        return self.occupations
+        return self.occupations, floating_occupations
             
     def get_next_tetrominos(self, img_array):
         
